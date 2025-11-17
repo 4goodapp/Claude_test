@@ -100,19 +100,42 @@ class EpubConverter:
             color: #7f8c8d;
             font-style: italic;
         }
+        /* Table wrapper for horizontal scrolling */
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 1em 0;
+            -webkit-overflow-scrolling: touch;
+        }
         table {
             border-collapse: collapse;
-            width: 100%;
-            margin: 1em 0;
+            min-width: 100%;
+            width: max-content;
+            table-layout: fixed;
+            margin: 0;
         }
         th, td {
             border: 1px solid #95a5a6;
-            padding: 0.5em;
+            padding: 0.6em 1em;
             text-align: left;
+            vertical-align: top;
+            word-wrap: break-word;
+            min-width: 120px;
         }
         th {
             background-color: #34495e;
             color: white;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        td {
+            background-color: #fafafa;
+        }
+        tr:nth-child(even) td {
+            background-color: #f0f0f0;
+        }
+        /* Ensure colgroup widths are respected */
+        colgroup col {
+            width: auto;
         }
     """
 
@@ -183,6 +206,9 @@ class EpubConverter:
 
         # Inline code (not in code blocks)
         html = re.sub(r'`([^`]+)`', r'<code>\1</code>', html)
+
+        # Tables (must be before lists and paragraphs)
+        html = self._process_tables(html)
 
         # Lists
         html = self._process_lists(html)
@@ -329,6 +355,113 @@ class EpubConverter:
             result.append('</blockquote>')
 
         return '\n'.join(result)
+
+    def _process_tables(self, text: str) -> str:
+        """Process markdown tables with proper alignment and wrapper."""
+        lines = text.split('\n')
+        result = []
+        table_lines = []
+        in_table = False
+
+        for i, line in enumerate(lines):
+            # Check if line is a table row (contains |)
+            if '|' in line and line.strip().startswith('|'):
+                if not in_table:
+                    in_table = True
+                    table_lines = []
+                table_lines.append(line)
+            else:
+                if in_table:
+                    # End of table, process it
+                    html_table = self._convert_table(table_lines)
+                    result.append(html_table)
+                    in_table = False
+                    table_lines = []
+                result.append(line)
+
+        # Handle table at end of file
+        if in_table and table_lines:
+            html_table = self._convert_table(table_lines)
+            result.append(html_table)
+
+        return '\n'.join(result)
+
+    def _convert_table(self, lines: List[str]) -> str:
+        """Convert markdown table lines to HTML table."""
+        if len(lines) < 2:
+            return '\n'.join(lines)
+
+        # Parse header row
+        header_row = lines[0].strip()
+        if header_row.startswith('|'):
+            header_row = header_row[1:]
+        if header_row.endswith('|'):
+            header_row = header_row[:-1]
+        headers = [cell.strip() for cell in header_row.split('|')]
+
+        # Check for separator row (---|---|---)
+        separator_idx = 1
+        alignments = []
+        if len(lines) > 1 and re.match(r'^\|?\s*:?-+:?\s*\|', lines[1]):
+            sep_row = lines[1].strip()
+            if sep_row.startswith('|'):
+                sep_row = sep_row[1:]
+            if sep_row.endswith('|'):
+                sep_row = sep_row[:-1]
+            sep_cells = [cell.strip() for cell in sep_row.split('|')]
+
+            # Determine alignment for each column
+            for cell in sep_cells:
+                if cell.startswith(':') and cell.endswith(':'):
+                    alignments.append('center')
+                elif cell.endswith(':'):
+                    alignments.append('right')
+                else:
+                    alignments.append('left')
+            separator_idx = 2
+        else:
+            alignments = ['left'] * len(headers)
+
+        # Build HTML table with colgroup for fixed widths
+        html = ['<div class="table-wrapper">']
+        html.append('<table>')
+
+        # Add colgroup for consistent column widths
+        html.append('<colgroup>')
+        for _ in headers:
+            html.append('<col/>')
+        html.append('</colgroup>')
+
+        # Table header
+        html.append('<thead>')
+        html.append('<tr>')
+        for i, header in enumerate(headers):
+            align = alignments[i] if i < len(alignments) else 'left'
+            html.append(f'<th style="text-align: {align};">{header}</th>')
+        html.append('</tr>')
+        html.append('</thead>')
+
+        # Table body
+        html.append('<tbody>')
+        for line in lines[separator_idx:]:
+            row = line.strip()
+            if row.startswith('|'):
+                row = row[1:]
+            if row.endswith('|'):
+                row = row[:-1]
+            cells = [cell.strip() for cell in row.split('|')]
+
+            html.append('<tr>')
+            for i, cell in enumerate(cells):
+                align = alignments[i] if i < len(alignments) else 'left'
+                html.append(f'<td style="text-align: {align};">{cell}</td>')
+            html.append('</tr>')
+        html.append('</tbody>')
+
+        html.append('</table>')
+        html.append('</div>')
+
+        return '\n'.join(html)
 
     def _process_paragraphs(self, text: str) -> str:
         """Wrap text in paragraph tags."""
